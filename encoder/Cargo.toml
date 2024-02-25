@@ -1,0 +1,88 @@
+[package]
+name = "solana-binary-encoder"
+version = "1.0.0"
+description = "Solana Binary Encoder"
+edition = "2021"
+
+[dependencies]
+dotenv = "0.15.0"
+Inflector = "0.11.4"
+bincode = "1.3.3"
+bytes = "1.2"
+bzip2 = "0.4.3"
+enum-iterator = "1.2.0"
+flate2 = "1.0.24"
+futures = "0.3.24"
+#goauth = "0.13.1"
+#http = "0.2.8"
+#hyper = "0.14.20"
+#hyper-proxy = "0.9.1"
+log = "0.4.17"
+env_logger = "0.9.0"
+envy = "0.4.2"
+prost = "0.11.0"
+prost-types = "0.11.1"
+serde = "1.0.144"
+serde_derive = "1.0.103"
+serde_json = "1.0.83"
+borsh = "0.9.1"
+borsh-derive = "0.9.1"
+bs58 = "0.4.0"
+base64 = "0.13.0"
+jsonrpc-core = "18.0.0"
+lazy_static = "1.4.0"
+num-derive = "0.3"
+console = "0.15.0"
+pretty-hex = "0.3.0"
+num-traits = { version = "0.2", default-features = true, features = ["i128", "std"] }
+generic-array = { version = "0.14.4", default-features = false, features = ["serde", "more_lengths"], optional = false }
+bytemuck = { version = "1.8.0", features = ["derive"] }
+#smpl_jwt = "0.7.1"
+#solana-metrics = { path = "../metrics", version = "=1.15.0" }
+#solana-sdk = { path = "../sdk", version = "=1.15.0" }
+solana-account-decoder = "=1.16.15"
+solana-sdk = "=1.16.15"
+solana-storage-proto = "=1.16.15"
+#solana-storage-encoder.proto = { path = "../storage-encoder.proto", version = "=1.15.0" }
+#solana-transaction-status = { path = "../transaction-status", version = "=1.15.0" }
+thiserror = "1.0"
+#tokio = "1"
+#tonic = { version = "0.8.0", features = ["tls", "transport"] }
+zstd = "0.11.2"
+chrono = { version = "0.4.22", features = ["serde"] }
+spl-memo = { version = "=3.0.1", features = ["no-entrypoint"] }
+sasl2-sys = { version = "*", features = [ "vendored" ] }
+#hdrs = "0.1.4"
+
+[dependencies.tokio]
+features = ["rt-multi-thread", "macros", "io-util"]
+version = "1.11.0"
+
+# openssl is a dependency of the goauth and smpl_jwt crates, but explicitly
+# declare it here as well to activate the "vendored" feature that builds OpenSSL
+# statically...
+[target."cfg(not(windows))".dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+# ...except on Windows to avoid having to deal with getting CI past a build-time
+# Perl dependency
+[target."cfg(windows)".dependencies]
+openssl = { version = "0.10", features = [] }
+
+[lib]
+crate-type = ["lib"]
+#path = "src/encoder"
+name = "solana_binary_encoder"
+
+[build-dependencies]
+rustc_version = "0.4"
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+
+[[bin]]
+name = "sol-block-encoder"
+path = "src/bin/sol-block-encoder.rs"
+
+[[bin]]
+name = "sol-tx-encoder"
+path = "src/bin/sol-tx-encoder.rs"
