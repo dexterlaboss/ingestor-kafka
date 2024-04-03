@@ -11,6 +11,7 @@ use {
             TransactionTokenBalance,
             VersionedConfirmedBlock,
             TransactionByAddrInfo,
+            ConfirmedTransactionWithStatusMeta,
         },
         // transaction_error::TransactionError,
         // account_decoder::UiTokenAmount,
@@ -50,6 +51,7 @@ use {
         reward_type::RewardType,
         signature::Signature,
         hash::Hash,
+        clock::{UnixTimestamp},
     },
     solana_account_decoder::parse_token::UiTokenAmount,
     std::{
@@ -383,6 +385,17 @@ impl TryFrom<generated::TransactionStatusMeta> for TransactionStatusMeta {
             return_data,
             compute_units_consumed,
         })
+    }
+}
+
+impl From<ConfirmedTransactionWithStatusMeta> for generated::ConfirmedTransactionWithStatusMeta {
+    fn from(value: ConfirmedTransactionWithStatusMeta) -> Self {
+        Self {
+            slot: value.slot as u64, // Assuming Slot can be directly converted to u64
+            tx_with_meta: Some(value.tx_with_meta.into()), // Direct use of .into() due to existing From trait
+            // block_time: value.block_time.map(|bt| UnixTimestamp { seconds: bt }), // Assuming UnixTimestamp in the destination struct is compatible
+            block_time: value.block_time.map(|timestamp| generated::UnixTimestamp { timestamp }),
+        }
     }
 }
 

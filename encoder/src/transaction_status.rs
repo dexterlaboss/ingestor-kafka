@@ -2013,3 +2013,9 @@ impl From<EncodedConfirmedBlock> for UiConfirmedBlock {
         }
     }
 }
+
+impl From<VersionedTransactionWithStatusMeta> for TransactionWithStatusMeta {
+    fn from(item: VersionedTransactionWithStatusMeta) -> Self {
+        TransactionWithStatusMeta::Complete(item)
+    }
+}

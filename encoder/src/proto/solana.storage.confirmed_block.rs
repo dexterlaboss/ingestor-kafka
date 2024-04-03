@@ -26,6 +26,16 @@ pub struct ConfirmedTransaction {
 }
 
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ConfirmedTransactionWithStatusMeta {
+    #[prost(uint64, tag="1")]
+    pub slot: u64,
+    #[prost(message, optional, tag="2")]
+    pub tx_with_meta: ::core::option::Option<ConfirmedTransaction>,
+    #[prost(message, optional, tag="3")]
+    pub block_time: ::core::option::Option<UnixTimestamp>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Transaction {
     #[prost(bytes="vec", repeated, tag="1")]
     pub signatures: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
