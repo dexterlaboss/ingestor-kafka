@@ -6,6 +6,7 @@ edition = "2021"
 
 [dependencies]
 bytes = "1.2"
+clap = "2.33.1"
 log = "0.4.17"
 env_logger = "0.9.0"
 envy = "0.4.2"
@@ -32,8 +33,10 @@ thrift-pool = "=1.4.0"
 chrono = { version = "0.4.22", features = ["serde"] }
 backoff = { version = "0.4.0", features = ["tokio"] }
 solana-binary-encoder = { path = "../encoder", version = "=1.0.0" }
+solana-clap-utils = "=1.16.15"
 solana-sdk = "=1.16.15"
 solana-storage-proto = "=1.16.15"
+solana-version = "=1.16.15"
 
 [dependencies.tokio]
 features = ["rt-multi-thread", "macros", "io-util"]

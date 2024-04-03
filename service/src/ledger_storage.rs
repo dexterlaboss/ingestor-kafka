@@ -11,6 +11,7 @@ use {
             VersionedConfirmedBlock,
             TransactionByAddrInfo,
             VersionedTransactionWithStatusMeta,
+            ConfirmedTransactionWithStatusMeta,
         },
         convert::{
             generated,
@@ -34,12 +35,11 @@ use {
     },
     std::{
         // time::Duration,
-        collections::{HashMap},
+        collections::{HashMap, HashSet},
     },
     thiserror::Error,
     tokio::task::JoinError,
 };
-// use solana_binary_encoder::{extract_memos, sysvar, transaction_error};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -103,6 +103,7 @@ pub struct LedgerStorageConfig {
     pub read_only: bool,
     pub timeout: Option<std::time::Duration>,
     pub address: String,
+    pub uploader_config: UploaderConfig,
 }
 
 impl Default for LedgerStorageConfig {
@@ -111,13 +112,42 @@ impl Default for LedgerStorageConfig {
             read_only: false,
             timeout: None,
             address: DEFAULT_ADDRESS.to_string(),
+            uploader_config: UploaderConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct UploaderConfig {
+    pub addrs: Option<FilterTxIncludeExclude>,
+    pub disable_tx: bool,
+    pub disable_tx_by_addr: bool,
+    pub disable_blocks: bool,
+    pub enable_full_tx: bool,
+}
+
+impl Default for UploaderConfig {
+    fn default() -> Self {
+        Self {
+            addrs: None,
+            disable_tx: false,
+            disable_tx_by_addr: false,
+            disable_blocks: false,
+            enable_full_tx: false,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct FilterTxIncludeExclude {
+    pub exclude: bool,
+    pub addrs: HashSet<Pubkey>,
 }
 
 #[derive(Clone)]
 pub struct LedgerStorage {
     connection: HBaseConnection,
+    uploader_config: UploaderConfig,
 }
 
 impl LedgerStorage {
@@ -138,6 +168,7 @@ impl LedgerStorage {
             read_only,
             timeout,
             address,
+            uploader_config,
         } = config;
         let connection = HBaseConnection::new(
             address.as_str(),
@@ -145,7 +176,10 @@ impl LedgerStorage {
             timeout,
         )
             .await;
-        Self { connection }
+        Self {
+            connection,
+            uploader_config,
+        }
     }
 
     pub async fn write_tx(&self, confirmed_tx: TransactionWithStatusMeta) -> Result<()> {
@@ -187,6 +221,7 @@ impl LedgerStorage {
         info!("HBase: Uploading block {:?} from slot {:?}", confirmed_block.blockhash, slot);
 
         let mut tx_cells = vec![];
+        let mut full_tx_cells = vec![];
         for (index, transaction_with_meta) in confirmed_block.transactions.iter().enumerate() {
             let VersionedTransactionWithStatusMeta { meta, transaction } = transaction_with_meta;
             let err = meta.status.clone().err();
@@ -194,8 +229,10 @@ impl LedgerStorage {
             let signature = transaction.signatures[0];
             let memo = extract_and_fmt_memos(transaction_with_meta);
 
+            let mut store_tx = false;
             for address in transaction_with_meta.account_keys().iter() {
-                if !is_sysvar_id(address) {
+                if !is_sysvar_id(address) && self.include_tx(address) {
+                    store_tx = true;
                     by_addr
                         .entry(address)
                         .or_default()
@@ -209,15 +246,30 @@ impl LedgerStorage {
                 }
             }
 
-            tx_cells.push((
-                signature.to_string(),
-                TransactionInfo {
-                    slot,
-                    index,
-                    err,
-                    memo,
-                },
-            ));
+            if store_tx {
+                if !self.uploader_config.disable_tx {
+                    tx_cells.push((
+                        signature.to_string(),
+                        TransactionInfo {
+                            slot,
+                            index,
+                            err,
+                            memo,
+                        },
+                    ));
+                }
+
+                if self.uploader_config.enable_full_tx {
+                    full_tx_cells.push((
+                        signature.to_string(),
+                        ConfirmedTransactionWithStatusMeta {
+                            slot,
+                            tx_with_meta: transaction_with_meta.clone().into(),
+                            block_time: confirmed_block.block_time,
+                        }.into()
+                    ));
+                }
+            }
         }
 
         let tx_by_addr_cells: Vec<_> = by_addr
@@ -237,7 +289,19 @@ impl LedgerStorage {
 
         let mut tasks = vec![];
 
-        if !tx_cells.is_empty() {
+        if !full_tx_cells.is_empty() && self.uploader_config.enable_full_tx {
+            let conn = self.connection.clone();
+            tasks.push(tokio::spawn(async move {
+                let result = conn.put_protobuf_cells_with_retry::<generated::ConfirmedTransactionWithStatusMeta>(
+                    "tx_full",
+                    &full_tx_cells
+                )
+                    .await;
+                result
+            }));
+        }
+
+        if !tx_cells.is_empty() && !self.uploader_config.disable_tx {
             let conn = self.connection.clone();
             info!("HBase: spawning tx upload thread");
             tasks.push(tokio::spawn(async move {
@@ -247,7 +311,7 @@ impl LedgerStorage {
             }));
         }
 
-        if !tx_by_addr_cells.is_empty() {
+        if !tx_by_addr_cells.is_empty() && !self.uploader_config.disable_tx_by_addr {
             let conn = self.connection.clone();
             info!("HBase: spawning tx-by-addr upload thread");
             tasks.push(tokio::spawn(async move {
@@ -304,14 +368,16 @@ impl LedgerStorage {
 
         info!("HBase: calling put_protobuf_cells_with_retry for blocks");
 
-        bytes_written += self
-            .connection
-            .put_protobuf_cells_with_retry::<generated::ConfirmedBlock>("blocks", &blocks_cells)
-            .await
-            .map_err(|err| {
-                error!("HBase: failed to upload block: {:?}", err);
-                err
-            })?;
+        if !self.uploader_config.disable_blocks {
+            bytes_written += self
+                .connection
+                .put_protobuf_cells_with_retry::<generated::ConfirmedBlock>("blocks", &blocks_cells)
+                .await
+                .map_err(|err| {
+                    error!("HBase: failed to upload block: {:?}", err);
+                    err
+                })?;
+        }
 
         info!("HBase: successfully uploaded block from slot {}", slot);
         // datapoint_info!(
@@ -321,6 +387,20 @@ impl LedgerStorage {
         //     ("bytes", bytes_written, i64),
         // );
         Ok(())
+    }
+
+    fn include_tx(&self, address: &Pubkey) -> bool {
+        if let Some(ref config) = self.uploader_config.addrs {
+            if config.exclude {
+                // If exclude is true, exclude the address if it's in the set.
+                !config.addrs.contains(address)
+            } else {
+                // If exclude is false, include the address only if it's in the set.
+                config.addrs.contains(address)
+            }
+        } else {
+            true
+        }
     }
 }
 
