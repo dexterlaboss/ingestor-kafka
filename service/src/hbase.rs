@@ -1,7 +1,7 @@
 // use thrift::transport::TBufferChannel;
 use {
     solana_binary_encoder::{
-        compression::{compress_best, decompress},
+        compression::{compress, compress_best, decompress, CompressionMethod},
     },
     backoff::{future::retry, ExponentialBackoff},
     log::*,
@@ -120,13 +120,14 @@ impl HBaseConnection {
         &self,
         table: &str,
         cells: &[(RowKey, T)],
+        use_compression: bool,
     ) -> Result<usize>
         where
             T: serde::ser::Serialize,
     {
         retry(ExponentialBackoff::default(), || async {
             let mut client = self.client();
-            Ok(client.put_bincode_cells(table, cells).await?)
+            Ok(client.put_bincode_cells(table, cells, use_compression).await?)
         })
             .await
     }
@@ -135,13 +136,14 @@ impl HBaseConnection {
         &self,
         table: &str,
         cells: &[(RowKey, T)],
+        use_compression: bool,
     ) -> Result<usize>
         where
             T: prost::Message,
     {
         retry(ExponentialBackoff::default(), || async {
             let mut client = self.client();
-            Ok(client.put_protobuf_cells(table, cells).await?)
+            Ok(client.put_protobuf_cells(table, cells, use_compression).await?)
         })
             .await
     }
@@ -371,6 +373,7 @@ impl HBase {
         &mut self,
         table: &str,
         cells: &[(RowKey, T)],
+        use_compression: bool,
     ) -> Result<usize>
         where
             T: serde::ser::Serialize,
@@ -378,7 +381,14 @@ impl HBase {
         let mut bytes_written = 0;
         let mut new_row_data = vec![];
         for (row_key, data) in cells {
-            let data = compress_best(&bincode::serialize(&data).unwrap())?;
+            let serialized_data = bincode::serialize(&data).unwrap();
+
+            let data = if use_compression {
+                compress_best(&serialized_data)?
+            } else {
+                compress(CompressionMethod::NoCompression, &serialized_data)?
+            };
+
             bytes_written += data.len();
             new_row_data.push((row_key, vec![("bin".to_string(), data)]));
         }
@@ -391,6 +401,7 @@ impl HBase {
         &mut self,
         table: &str,
         cells: &[(RowKey, T)],
+        use_compression: bool,
     ) -> Result<usize>
         where
             T: prost::Message,
@@ -400,7 +411,13 @@ impl HBase {
         for (row_key, data) in cells {
             let mut buf = Vec::with_capacity(data.encoded_len());
             data.encode(&mut buf).unwrap();
-            let data = compress_best(&buf)?;
+
+            let data = if use_compression {
+                compress_best(&buf)?
+            } else {
+                compress(CompressionMethod::NoCompression, &buf)?
+            };
+
             bytes_written += data.len();
             new_row_data.push((row_key, vec![("proto".to_string(), data)]));
         }
