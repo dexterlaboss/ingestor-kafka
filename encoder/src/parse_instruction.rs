@@ -81,6 +81,7 @@ pub struct ParsedInstruction {
     pub program: String,
     pub program_id: String,
     pub parsed: Value,
+    pub stack_height: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -110,6 +111,7 @@ pub fn parse(
     program_id: &Pubkey,
     instruction: &CompiledInstruction,
     _account_keys: &AccountKeys,
+    stack_height: Option<u32>,
 ) -> Result<ParsedInstruction, ParseInstructionError> {
     let program_name = PARSABLE_PROGRAM_IDS
         .get(program_id)
@@ -137,6 +139,7 @@ pub fn parse(
         program: format!("{:?}", program_name).to_kebab_case(),
         program_id: program_id.to_string(),
         parsed: parsed_json,
+        stack_height,
     })
 }
 

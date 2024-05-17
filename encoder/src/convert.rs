@@ -7,6 +7,7 @@ use {
             TransactionWithStatusMeta,
             VersionedTransactionWithStatusMeta,
             TransactionStatusMeta,
+            InnerInstruction,
             InnerInstructions,
             TransactionTokenBalance,
             VersionedConfirmedBlock,
@@ -512,6 +513,30 @@ impl From<CompiledInstruction> for generated::CompiledInstruction {
             program_id_index: value.program_id_index as u32,
             accounts: value.accounts,
             data: value.data,
+        }
+    }
+}
+
+impl From<InnerInstruction> for generated::InnerInstruction {
+    fn from(value: InnerInstruction) -> Self {
+        Self {
+            program_id_index: value.instruction.program_id_index as u32,
+            accounts: value.instruction.accounts,
+            data: value.instruction.data,
+            stack_height: value.stack_height,
+        }
+    }
+}
+
+impl From<generated::InnerInstruction> for InnerInstruction {
+    fn from(value: generated::InnerInstruction) -> Self {
+        Self {
+            instruction: CompiledInstruction {
+                program_id_index: value.program_id_index as u8,
+                accounts: value.accounts,
+                data: value.data,
+            },
+            stack_height: value.stack_height,
         }
     }
 }

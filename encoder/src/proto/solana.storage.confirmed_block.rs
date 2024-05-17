@@ -129,7 +129,24 @@ pub struct InnerInstructions {
     #[prost(uint32, tag="1")]
     pub index: u32,
     #[prost(message, repeated, tag="2")]
-    pub instructions: ::prost::alloc::vec::Vec<CompiledInstruction>,
+    pub instructions: ::prost::alloc::vec::Vec<InnerInstruction>,
+    // pub instructions: ::prost::alloc::vec::Vec<CompiledInstruction>,
+}
+
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InnerInstruction {
+    #[prost(uint32, tag = "1")]
+    pub program_id_index: u32,
+    #[prost(bytes = "vec", tag = "2")]
+    pub accounts: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "3")]
+    pub data: ::prost::alloc::vec::Vec<u8>,
+    /// Invocation stack height of an inner instruction.
+    /// Available since Solana v1.14.6
+    /// Set to `None` for txs executed on earlier versions.
+    #[prost(uint32, optional, tag = "4")]
+    pub stack_height: ::core::option::Option<u32>,
 }
 
 #[derive(Clone, PartialEq, ::prost::Message)]
