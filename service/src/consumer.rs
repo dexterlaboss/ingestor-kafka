@@ -134,6 +134,8 @@ impl KafkaConsumer {
                             }
                         };
 
+                        info!("Parsing block with id {}", slot);
+
                         let block: EncodedConfirmedBlock = serde_json::from_str(&buffer).unwrap();
 
                         let options = BlockEncodingOptions {
