@@ -4,7 +4,7 @@ use {
         consumer::KafkaConsumer,
         producer::KafkaProducer,
         config::Config,
-        cli::{DefaultBlockUploaderArgs, block_uploader_service},
+        cli::{DefaultBlockUploaderArgs, block_uploader_app},
         ledger_storage::{
             LedgerStorage,
             LedgerStorageConfig,
@@ -70,28 +70,80 @@ fn process_arguments(matches: &ArgMatches) -> UploaderConfig {
     let disable_tx_by_addr = matches.is_present("disable_tx_by_addr");
     let disable_blocks = matches.is_present("disable_blocks");
     let enable_full_tx = matches.is_present("enable_full_tx");
+    let use_md5_row_key_salt = matches.is_present("use_md5_row_key_salt");
+    let filter_program_accounts = matches.is_present("filter_tx_by_addr_programs");
+    let filter_voting_tx = matches.is_present("filter_voting_tx");
+    let use_blocks_compression = !matches.is_present("disable_block_compression");
+    let use_tx_compression = !matches.is_present("disable_tx_compression");
+    let use_tx_by_addr_compression = !matches.is_present("disable_tx_by_addr_compression");
+    let use_tx_full_compression = !matches.is_present("disable_tx_full_compression");
 
-    let filter_tx_include_addrs: HashSet<Pubkey> =
-        values_t!(matches, "filter_tx_include_addr", Pubkey)
+    let filter_tx_full_include_addrs: HashSet<Pubkey> =
+        values_t!(matches, "filter_tx_full_include_addr", Pubkey)
             .unwrap_or_default()
             .iter()
             .cloned()
             .collect();
 
-    let filter_tx_exclude_addrs: HashSet<Pubkey> =
-        values_t!(matches, "filter_tx_exclude_addr", Pubkey)
+    let filter_tx_full_exclude_addrs: HashSet<Pubkey> =
+        values_t!(matches, "filter_tx_full_exclude_addr", Pubkey)
             .unwrap_or_default()
             .iter()
             .cloned()
             .collect();
 
-    let exclude_addrs = !filter_tx_exclude_addrs.is_empty();
-    let include_addrs = !filter_tx_include_addrs.is_empty();
+    let filter_tx_by_addr_include_addrs: HashSet<Pubkey> =
+        values_t!(matches, "filter_tx_by_addr_include_addr", Pubkey)
+            .unwrap_or_default()
+            .iter()
+            .cloned()
+            .collect();
 
-    let addrs = if exclude_addrs || include_addrs {
+    let filter_tx_by_addr_exclude_addrs: HashSet<Pubkey> =
+        values_t!(matches, "filter_tx_by_addr_exclude_addr", Pubkey)
+            .unwrap_or_default()
+            .iter()
+            .cloned()
+            .collect();
+
+    let tx_full_filter = create_filter(
+        filter_tx_full_exclude_addrs,
+        filter_tx_full_include_addrs
+    );
+    let tx_by_addr_filter = create_filter(
+        filter_tx_by_addr_exclude_addrs,
+        filter_tx_by_addr_include_addrs
+    );
+
+    UploaderConfig {
+        tx_full_filter,
+        tx_by_addr_filter,
+        disable_tx,
+        disable_tx_by_addr,
+        disable_blocks,
+        enable_full_tx,
+        use_md5_row_key_salt,
+        filter_program_accounts,
+        filter_voting_tx,
+        use_blocks_compression,
+        use_tx_compression,
+        use_tx_by_addr_compression,
+        use_tx_full_compression,
+        ..Default::default()
+    }
+}
+
+fn create_filter(
+    filter_tx_exclude_addrs: HashSet<Pubkey>,
+    filter_tx_include_addrs: HashSet<Pubkey>,
+) -> Option<FilterTxIncludeExclude> {
+    let exclude_tx_addrs = !filter_tx_exclude_addrs.is_empty();
+    let include_tx_addrs = !filter_tx_include_addrs.is_empty();
+
+    if exclude_tx_addrs || include_tx_addrs {
         let filter_tx_addrs = FilterTxIncludeExclude {
-            exclude: exclude_addrs,
-            addrs: if exclude_addrs {
+            exclude: exclude_tx_addrs,
+            addrs: if exclude_tx_addrs {
                 filter_tx_exclude_addrs
             } else {
                 filter_tx_include_addrs
@@ -100,14 +152,6 @@ fn process_arguments(matches: &ArgMatches) -> UploaderConfig {
         Some(filter_tx_addrs)
     } else {
         None
-    };
-
-    UploaderConfig {
-        addrs,
-        disable_tx,
-        disable_tx_by_addr,
-        disable_blocks,
-        enable_full_tx,
     }
 }
 
@@ -115,7 +159,7 @@ fn process_arguments(matches: &ArgMatches) -> UploaderConfig {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let default_args = DefaultBlockUploaderArgs::new();
     let solana_version = solana_version::version!();
-    let cli_app = block_uploader_service(solana_version, &default_args);
+    let cli_app = block_uploader_app(solana_version, &default_args);
     let matches = cli_app.get_matches();
 
     let uploader_config = process_arguments(&matches);
