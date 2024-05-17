@@ -1,3 +1,6 @@
+use std::str::FromStr;
+use solana_sdk::instruction::CompiledInstruction;
+use solana_sdk::message::VersionedMessage;
 use {
     crate::{
         hbase::Error as HBaseError,
@@ -40,6 +43,8 @@ use {
     thiserror::Error,
     tokio::task::JoinError,
 };
+use md5::{compute};
+use solana_sdk::message::v0::LoadedAddresses;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -79,8 +84,21 @@ fn slot_to_key(slot: Slot) -> String {
     format!("{slot:016x}")
 }
 
-fn slot_to_blocks_key(slot: Slot) -> String {
-    slot_to_key(slot)
+// fn slot_to_blocks_key(slot: Slot) -> String {
+//     slot_to_key(slot)
+// }
+
+fn slot_to_blocks_key(slot: Slot, use_md5: bool) -> String {
+    let slot_hex = slot_to_key(slot);
+
+    if use_md5 {
+        let hash_result = md5::compute(&slot_hex);
+        let truncated_hash_hex = format!("{:x}", hash_result)[..10].to_string();
+
+        format!("{}{}", truncated_hash_hex, slot_hex)
+    } else {
+        slot_hex
+    }
 }
 
 fn slot_to_tx_by_addr_key(slot: Slot) -> String {
@@ -97,6 +115,10 @@ struct TransactionInfo {
 }
 
 pub const DEFAULT_ADDRESS: &str = "127.0.0.1:9090";
+pub const BLOCKS_TABLE_NAME: &str = "blocks";
+pub const TX_TABLE_NAME: &str = "tx";
+pub const TX_BY_ADDR_TABLE_NAME: &str = "tx-by-addr";
+pub const FULL_TX_TABLE_NAME: &str = "tx_full";
 
 #[derive(Debug)]
 pub struct LedgerStorageConfig {
@@ -119,21 +141,45 @@ impl Default for LedgerStorageConfig {
 
 #[derive(Debug, Clone)]
 pub struct UploaderConfig {
-    pub addrs: Option<FilterTxIncludeExclude>,
+    pub tx_full_filter: Option<FilterTxIncludeExclude>,
+    pub tx_by_addr_filter: Option<FilterTxIncludeExclude>,
     pub disable_tx: bool,
     pub disable_tx_by_addr: bool,
     pub disable_blocks: bool,
     pub enable_full_tx: bool,
+    pub blocks_table_name: String,
+    pub tx_table_name: String,
+    pub tx_by_addr_table_name: String,
+    pub full_tx_table_name: String,
+    pub use_md5_row_key_salt: bool,
+    pub filter_program_accounts: bool,
+    pub filter_voting_tx: bool,
+    pub use_blocks_compression: bool,
+    pub use_tx_compression: bool,
+    pub use_tx_by_addr_compression: bool,
+    pub use_tx_full_compression: bool,
 }
 
 impl Default for UploaderConfig {
     fn default() -> Self {
         Self {
-            addrs: None,
+            tx_full_filter: None,
+            tx_by_addr_filter: None,
             disable_tx: false,
             disable_tx_by_addr: false,
             disable_blocks: false,
             enable_full_tx: false,
+            blocks_table_name: BLOCKS_TABLE_NAME.to_string(),
+            tx_table_name: TX_TABLE_NAME.to_string(),
+            tx_by_addr_table_name: TX_BY_ADDR_TABLE_NAME.to_string(),
+            full_tx_table_name: FULL_TX_TABLE_NAME.to_string(),
+            use_md5_row_key_salt: false,
+            filter_program_accounts: false,
+            filter_voting_tx: false,
+            use_blocks_compression: true,
+            use_tx_compression: true,
+            use_tx_by_addr_compression: true,
+            use_tx_full_compression: true,
         }
     }
 }
@@ -192,7 +238,11 @@ impl LedgerStorage {
             Some(signature) => {
                 let tx_cells = [(signature.to_string(), confirmed_tx.into())];
                 self.connection
-                    .put_protobuf_cells_with_retry::<generated::ConfirmedTransaction>("tx_full", &tx_cells)
+                    .put_protobuf_cells_with_retry::<generated::ConfirmedTransaction>(
+                        self.uploader_config.full_tx_table_name.as_str(),
+                        &tx_cells,
+                        self.uploader_config.use_tx_full_compression
+                    )
                     .await?;
 
                 let log_output = format!(
@@ -229,46 +279,65 @@ impl LedgerStorage {
             let signature = transaction.signatures[0];
             let memo = extract_and_fmt_memos(transaction_with_meta);
 
-            let mut store_tx = false;
-            for address in transaction_with_meta.account_keys().iter() {
-                if !is_sysvar_id(address) && self.include_tx(address) {
-                    store_tx = true;
-                    by_addr
-                        .entry(address)
-                        .or_default()
-                        .push(TransactionByAddrInfo {
-                            signature,
-                            err: err.clone(),
-                            index,
-                            memo: memo.clone(),
-                            block_time: confirmed_block.block_time,
-                        });
+            let mut should_skip_tx = false;
+            let mut should_skip_tx_by_addr = false;
+            let mut should_skip_full_tx = false;
+
+            if self.uploader_config.filter_voting_tx && is_voting_tx(transaction_with_meta) {
+                should_skip_tx_by_addr = true;
+                should_skip_full_tx = true;
+            }
+
+            let combined_keys = get_account_keys(&transaction_with_meta);
+
+            if !should_skip_tx_by_addr {
+                for address in transaction_with_meta.account_keys().iter() {
+                    // Filter program accounts from tx-by-addr index
+                    if self.uploader_config.filter_program_accounts
+                        && is_program_account(address, transaction_with_meta, &combined_keys) {
+                        continue;
+                    }
+
+                    if should_skip_full_tx || !self.should_include_in_tx_full(address) {
+                        should_skip_full_tx = true;
+                    }
+
+                    if !is_sysvar_id(address) && self.should_include_in_tx_by_addr(address) {
+                        by_addr
+                            .entry(address)
+                            .or_default()
+                            .push(TransactionByAddrInfo {
+                                signature,
+                                err: err.clone(),
+                                index,
+                                memo: memo.clone(),
+                                block_time: confirmed_block.block_time,
+                            });
+                    }
                 }
             }
 
-            if store_tx {
-                if !self.uploader_config.disable_tx {
-                    tx_cells.push((
-                        signature.to_string(),
-                        TransactionInfo {
-                            slot,
-                            index,
-                            err,
-                            memo,
-                        },
-                    ));
-                }
+            if !self.uploader_config.disable_tx && !should_skip_tx {
+                tx_cells.push((
+                    signature.to_string(),
+                    TransactionInfo {
+                        slot,
+                        index,
+                        err,
+                        memo,
+                    },
+                ));
+            }
 
-                if self.uploader_config.enable_full_tx {
-                    full_tx_cells.push((
-                        signature.to_string(),
-                        ConfirmedTransactionWithStatusMeta {
-                            slot,
-                            tx_with_meta: transaction_with_meta.clone().into(),
-                            block_time: confirmed_block.block_time,
-                        }.into()
-                    ));
-                }
+            if self.uploader_config.enable_full_tx && !should_skip_full_tx {
+                full_tx_cells.push((
+                    signature.to_string(),
+                    ConfirmedTransactionWithStatusMeta {
+                        slot,
+                        tx_with_meta: transaction_with_meta.clone().into(),
+                        block_time: confirmed_block.block_time,
+                    }.into()
+                ));
             }
         }
 
@@ -291,10 +360,13 @@ impl LedgerStorage {
 
         if !full_tx_cells.is_empty() && self.uploader_config.enable_full_tx {
             let conn = self.connection.clone();
+            let full_tx_table_name = self.uploader_config.full_tx_table_name.clone();
+            let use_tx_full_compression = self.uploader_config.use_tx_full_compression.clone();
             tasks.push(tokio::spawn(async move {
                 let result = conn.put_protobuf_cells_with_retry::<generated::ConfirmedTransactionWithStatusMeta>(
-                    "tx_full",
-                    &full_tx_cells
+                    full_tx_table_name.as_str(),
+                    &full_tx_cells,
+                    use_tx_full_compression
                 )
                     .await;
                 result
@@ -303,22 +375,31 @@ impl LedgerStorage {
 
         if !tx_cells.is_empty() && !self.uploader_config.disable_tx {
             let conn = self.connection.clone();
+            let tx_table_name = self.uploader_config.tx_table_name.clone();
+            let use_tx_compression = self.uploader_config.use_tx_compression.clone();
             info!("HBase: spawning tx upload thread");
             tasks.push(tokio::spawn(async move {
                 info!("HBase: calling put_bincode_cells_with_retry for tx");
-                conn.put_bincode_cells_with_retry::<TransactionInfo>("tx", &tx_cells)
+                conn.put_bincode_cells_with_retry::<TransactionInfo>(
+                    tx_table_name.as_str(),
+                    &tx_cells,
+                    use_tx_compression
+                )
                     .await
             }));
         }
 
         if !tx_by_addr_cells.is_empty() && !self.uploader_config.disable_tx_by_addr {
             let conn = self.connection.clone();
+            let tx_by_addr_table_name = self.uploader_config.tx_by_addr_table_name.clone();
+            let use_tx_by_addr_compression = self.uploader_config.use_tx_by_addr_compression.clone();
             info!("HBase: spawning tx-by-addr upload thread");
             tasks.push(tokio::spawn(async move {
                 info!("HBase: calling put_protobuf_cells_with_retry tx-by-addr");
                 let result = conn.put_protobuf_cells_with_retry::<tx_by_addr::TransactionByAddr>(
-                    "tx-by-addr",
+                    tx_by_addr_table_name.as_str(),
                     &tx_by_addr_cells,
+                    use_tx_by_addr_compression
                 )
                     .await;
                 info!("HBase: finished put_protobuf_cells_with_retry call for tx-by-addr");
@@ -361,17 +442,27 @@ impl LedgerStorage {
 
         let num_transactions = confirmed_block.transactions.len();
 
+        // let signature = "2Mh6diFhdKfy5MyJfWv2AWEYe71wdyMGceDGxTmtpsFDUMXptWe3RtEXAef9SCoNJveiEQUMDdeP6UJVDdrQzbdV";
+        // print_ui_amount_for_signature(confirmed_block.clone().into(), signature);
+
         // Store the block itself last, after all other metadata about the block has been
         // successfully stored.  This avoids partial uploaded blocks from becoming visible to
         // `get_confirmed_block()` and `get_confirmed_blocks()`
-        let blocks_cells = [(slot_to_blocks_key(slot), confirmed_block.into())];
+        let blocks_cells = [(
+            slot_to_blocks_key(slot, self.uploader_config.use_md5_row_key_salt),
+            confirmed_block.into()
+        )];
 
         info!("HBase: calling put_protobuf_cells_with_retry for blocks");
 
         if !self.uploader_config.disable_blocks {
             bytes_written += self
                 .connection
-                .put_protobuf_cells_with_retry::<generated::ConfirmedBlock>("blocks", &blocks_cells)
+                .put_protobuf_cells_with_retry::<generated::ConfirmedBlock>(
+                    self.uploader_config.blocks_table_name.as_str(),
+                    &blocks_cells,
+                    self.uploader_config.use_blocks_compression
+                )
                 .await
                 .map_err(|err| {
                     error!("HBase: failed to upload block: {:?}", err);
@@ -389,14 +480,28 @@ impl LedgerStorage {
         Ok(())
     }
 
-    fn include_tx(&self, address: &Pubkey) -> bool {
-        if let Some(ref config) = self.uploader_config.addrs {
-            if config.exclude {
+    fn should_include_in_tx_full(&self, address: &Pubkey) -> bool {
+        if let Some(ref filter) = self.uploader_config.tx_full_filter {
+            if filter.exclude {
                 // If exclude is true, exclude the address if it's in the set.
-                !config.addrs.contains(address)
+                !filter.addrs.contains(address)
             } else {
                 // If exclude is false, include the address only if it's in the set.
-                config.addrs.contains(address)
+                filter.addrs.contains(address)
+            }
+        } else {
+            true
+        }
+    }
+
+    fn should_include_in_tx_by_addr(&self, address: &Pubkey) -> bool {
+        if let Some(ref filter) = self.uploader_config.tx_by_addr_filter {
+            if filter.exclude {
+                // If exclude is true, exclude the address if it's in the set.
+                !filter.addrs.contains(address)
+            } else {
+                // If exclude is false, include the address only if it's in the set.
+                filter.addrs.contains(address)
             }
         } else {
             true
@@ -404,4 +509,60 @@ impl LedgerStorage {
     }
 }
 
+fn get_account_keys(transaction_with_meta: &VersionedTransactionWithStatusMeta) -> Vec<Pubkey> {
+    match &transaction_with_meta.transaction.message {
+        VersionedMessage::V0(_) => {
+            let static_keys = transaction_with_meta.transaction.message.static_account_keys();
+            let LoadedAddresses { writable, readonly } = &transaction_with_meta.meta.loaded_addresses;
 
+            static_keys.iter()
+                .chain(writable.iter())
+                .chain(readonly.iter())
+                .cloned()
+                .collect()
+        },
+        VersionedMessage::Legacy(_) => {
+            Vec::from(transaction_with_meta.transaction.message.static_account_keys())
+        }
+    }
+}
+
+fn is_voting_tx(transaction_with_meta: &VersionedTransactionWithStatusMeta) -> bool {
+    let account_address = Pubkey::from_str("Vote111111111111111111111111111111111111111").unwrap();
+
+    has_account(transaction_with_meta, &account_address)
+}
+
+fn has_account(transaction_with_meta: &VersionedTransactionWithStatusMeta, address: &Pubkey) -> bool {
+     transaction_with_meta
+         .transaction
+         .message
+         .static_account_keys()
+         .contains(&address)
+}
+
+fn is_program_account(
+    address: &Pubkey,
+    transaction_with_meta: &VersionedTransactionWithStatusMeta,
+    combined_keys: &[Pubkey]
+) -> bool {
+    // Helper to check if the address is used as a program account in a given instruction
+    let check_program_id = |instruction: &CompiledInstruction, account_keys: &[Pubkey]| -> bool {
+        let program_id = &account_keys[instruction.program_id_index as usize];
+        program_id == address
+    };
+
+    // Check in outer instructions
+    let used_in_outer = transaction_with_meta.transaction.message.instructions().iter().any(|instruction| {
+        check_program_id(instruction, combined_keys)
+    });
+
+    // Check in inner instructions
+    let used_in_inner = transaction_with_meta.meta.inner_instructions.as_ref()
+        .map_or(false, |inner_instructions| {
+            inner_instructions.iter().flat_map(|inner| &inner.instructions)
+                .any(|inner_instruction| check_program_id(&inner_instruction.instruction, combined_keys))
+        });
+
+    used_in_outer || used_in_inner
+}
