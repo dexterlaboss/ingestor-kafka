@@ -14,7 +14,8 @@ prost = "0.11.0"
 prost-types = "0.11.1"
 serde = "1.0.144"
 serde_derive = "1.0.103"
-serde_json = "1.0.83"
+#serde_json = "1.0.83"
+serde_json = { version = "1.0.83", features = ["float_roundtrip"] }
 borsh = "0.9.1"
 borsh-derive = "0.9.1"
 bs58 = "0.4.0"
@@ -37,6 +38,9 @@ solana-clap-utils = "=1.16.15"
 solana-sdk = "=1.16.15"
 solana-storage-proto = "=1.16.15"
 solana-version = "=1.16.15"
+rust_decimal = "1.0"
+hex = "0.4.3"
+md5 = "0.7"
 
 [dependencies.tokio]
 features = ["rt-multi-thread", "macros", "io-util"]
@@ -59,3 +63,7 @@ rustc_version = "0.4"
 [[bin]]
 name = "block-encoder-service"
 path = "src/bin/sol-block-encoder-service.rs"
+
+[[bin]]
+name = "block-uploader"
+path = "src/bin/sol-block-uploader.rs"
