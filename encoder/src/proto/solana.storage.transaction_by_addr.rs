@@ -9,14 +9,14 @@ pub struct TransactionByAddr {
 pub struct TransactionByAddrInfo {
     #[prost(bytes = "vec", tag = "1")]
     pub signature: ::prost::alloc::vec::Vec<u8>,
-    #[prost(message, optional, tag = "2")]
-    pub err: ::core::option::Option<TransactionError>,
+    // #[prost(message, optional, tag = "2")]
+    // pub err: ::core::option::Option<TransactionError>,
     #[prost(uint32, tag = "3")]
     pub index: u32,
-    #[prost(message, optional, tag = "4")]
-    pub memo: ::core::option::Option<Memo>,
-    #[prost(message, optional, tag = "5")]
-    pub block_time: ::core::option::Option<UnixTimestamp>,
+    // #[prost(message, optional, tag = "4")]
+    // pub memo: ::core::option::Option<Memo>,
+    // #[prost(message, optional, tag = "5")]
+    // pub block_time: ::core::option::Option<UnixTimestamp>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

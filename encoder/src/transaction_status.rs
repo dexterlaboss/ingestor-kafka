@@ -67,10 +67,10 @@ use std::str::FromStr;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransactionByAddrInfo {
     pub signature: Signature,          // The transaction signature
-    pub err: Option<TransactionError>, // None if the transaction executed successfully
+    // pub err: Option<TransactionError>, // None if the transaction executed successfully
     pub index: u32,                    // Where the transaction is located in the block
-    pub memo: Option<String>,          // Transaction memo
-    pub block_time: Option<UnixTimestamp>,
+    // pub memo: Option<String>,          // Transaction memo
+    // pub block_time: Option<UnixTimestamp>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
