@@ -308,13 +308,26 @@ impl LedgerStorage {
                             .or_default()
                             .push(TransactionByAddrInfo {
                                 signature,
-                                err: err.clone(),
+                                // err: err.clone(),
                                 index,
-                                memo: memo.clone(),
-                                block_time: confirmed_block.block_time,
+                                // memo: memo.clone(),
+                                // block_time: confirmed_block.block_time,
                             });
                     }
                 }
+            }
+
+            if self.uploader_config.enable_full_tx && !should_skip_full_tx {
+                should_skip_tx = true;
+
+                full_tx_cells.push((
+                    signature.to_string(),
+                    ConfirmedTransactionWithStatusMeta {
+                        slot,
+                        tx_with_meta: transaction_with_meta.clone().into(),
+                        block_time: confirmed_block.block_time,
+                    }.into()
+                ));
             }
 
             if !self.uploader_config.disable_tx && !should_skip_tx {
@@ -326,17 +339,6 @@ impl LedgerStorage {
                         err,
                         memo,
                     },
-                ));
-            }
-
-            if self.uploader_config.enable_full_tx && !should_skip_full_tx {
-                full_tx_cells.push((
-                    signature.to_string(),
-                    ConfirmedTransactionWithStatusMeta {
-                        slot,
-                        tx_with_meta: transaction_with_meta.clone().into(),
-                        block_time: confirmed_block.block_time,
-                    }.into()
                 ));
             }
         }
