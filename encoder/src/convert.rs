@@ -1111,18 +1111,18 @@ impl From<TransactionByAddrInfo> for tx_by_addr::TransactionByAddrInfo {
     fn from(by_addr: TransactionByAddrInfo) -> Self {
         let TransactionByAddrInfo {
             signature,
-            // err,
+            err,
             index,
-            // memo,
-            // block_time,
+            memo,
+            block_time,
         } = by_addr;
 
         Self {
             signature: <Signature as AsRef<[u8]>>::as_ref(&signature).into(),
-            // err: err.map(|e| e.into()),
+            err: err.map(|e| e.into()),
             index,
-            // memo: memo.map(|memo| tx_by_addr::Memo { memo }),
-            // block_time: block_time.map(|timestamp| tx_by_addr::UnixTimestamp { timestamp }),
+            memo: memo.map(|memo| tx_by_addr::Memo { memo }),
+            block_time: block_time.map(|timestamp| tx_by_addr::UnixTimestamp { timestamp }),
         }
     }
 }

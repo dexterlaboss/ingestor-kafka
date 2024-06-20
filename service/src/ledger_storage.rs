@@ -111,7 +111,7 @@ struct TransactionInfo {
     slot: Slot, // The slot that contains the block with this transaction in it
     index: u32, // Where the transaction is located in the block
     err: Option<TransactionError>, // None if the transaction executed successfully
-    memo: Option<String>, // Transaction memo
+    // memo: Option<String>, // Transaction memo
 }
 
 pub const DEFAULT_ADDRESS: &str = "127.0.0.1:9090";
@@ -308,10 +308,10 @@ impl LedgerStorage {
                             .or_default()
                             .push(TransactionByAddrInfo {
                                 signature,
-                                // err: err.clone(),
+                                err: err.clone(),
                                 index,
-                                // memo: memo.clone(),
-                                // block_time: confirmed_block.block_time,
+                                memo: memo.clone(),
+                                block_time: confirmed_block.block_time,
                             });
                     }
                 }
@@ -337,7 +337,7 @@ impl LedgerStorage {
                         slot,
                         index,
                         err,
-                        memo,
+                        // memo,
                     },
                 ));
             }
