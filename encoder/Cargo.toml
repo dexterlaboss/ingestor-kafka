@@ -2,6 +2,10 @@
 name = "solana-binary-encoder"
 version = "1.0.0"
 description = "Solana Binary Encoder"
+authors = ["Aurimas Narkevicius <aurimas.n@dexterlab.com>"]
+license = "Apache-2.0"
+repository = "https://github.com/dexterlaboss/solana-lite-rpc-storage-ingestor"
+homepage = "https://dexterlab.com"
 edition = "2021"
 
 [dependencies]
