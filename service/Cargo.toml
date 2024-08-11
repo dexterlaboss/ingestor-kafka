@@ -37,7 +37,7 @@ thrift-pool = "=1.4.0"
 #hdfs = "0.0.4"
 chrono = { version = "0.4.22", features = ["serde"] }
 backoff = { version = "0.4.0", features = ["tokio"] }
-solana-binary-encoder = { path = "../encoder", version = "=1.0.0" }
+solana-binary-encoder = { path = "../encoder", version = "=1.0.6" }
 solana-clap-utils = "=1.16.15"
 solana-sdk = "=1.16.15"
 solana-storage-proto = "=1.16.15"
