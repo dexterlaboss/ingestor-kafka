@@ -1,6 +1,6 @@
 [package]
 name = "solana-binary-encoder"
-version = "1.0.0"
+version = "1.0.6"
 description = "Solana Binary Encoder"
 authors = ["Aurimas Narkevicius <aurimas.n@dexterlab.com>"]
 license = "Apache-2.0"
