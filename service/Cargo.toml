@@ -45,6 +45,7 @@ solana-version = "=1.16.15"
 rust_decimal = "1.0"
 hex = "0.4.3"
 md5 = "0.7"
+memcache = "0.17.2"
 
 [dependencies.tokio]
 features = ["rt-multi-thread", "macros", "io-util"]

@@ -18,6 +18,7 @@ use {
         ledger_storage::{
             LedgerStorage,
             LedgerStorageConfig,
+            LedgerCacheConfig,
             FilterTxIncludeExclude,
             UploaderConfig
         },
@@ -52,7 +53,7 @@ use rust_decimal::Decimal;
 //     Ok(())
 // }
 
-fn process_arguments(matches: &ArgMatches) -> UploaderConfig {
+fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
     let disable_tx = matches.is_present("disable_tx");
     let disable_tx_by_addr = matches.is_present("disable_tx_by_addr");
     let disable_blocks = matches.is_present("disable_blocks");
@@ -120,6 +121,40 @@ fn process_arguments(matches: &ArgMatches) -> UploaderConfig {
     }
 }
 
+fn process_cache_arguments(matches: &ArgMatches) -> LedgerCacheConfig {
+    let enable_full_tx_cache = matches.is_present("enable_full_tx_cache");
+
+    let address = if matches.is_present("cache_address") {
+        value_t_or_exit!(matches, "cache_address", String)
+    } else {
+        String::new()
+    };
+
+    let timeout = if matches.is_present("cache_timeout") {
+        Some(std::time::Duration::from_secs(
+            value_t_or_exit!(matches, "cache_timeout", u64),
+        ))
+    } else {
+        None
+    };
+
+    let tx_cache_expiration = if matches.is_present("tx_cache_expiration") {
+        Some(std::time::Duration::from_secs(
+            value_t_or_exit!(matches, "tx_cache_expiration", u64) * 24 * 60 * 60,
+        ))
+    } else {
+        None
+    };
+
+    LedgerCacheConfig {
+        enable_full_tx_cache,
+        address,
+        timeout,
+        tx_cache_expiration,
+        ..Default::default()
+    }
+}
+
 fn create_filter(
     filter_tx_exclude_addrs: HashSet<Pubkey>,
     filter_tx_include_addrs: HashSet<Pubkey>,
@@ -154,7 +189,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli_app = block_uploader_app(solana_version, &default_args);
     let matches = cli_app.get_matches();
 
-    let uploader_config = process_arguments(&matches);
+    let uploader_config = process_uploader_arguments(&matches);
+    let cache_config = process_cache_arguments(&matches);
 
     env_logger::init();
 
@@ -167,6 +203,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         timeout: None,
         address: app_config.hbase_address.clone(),
         uploader_config: uploader_config.clone(),
+        cache_config: cache_config.clone(),
     };
     let storage = LedgerStorage::new_with_config(storage_config).await;
 
@@ -192,45 +229,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let block: EncodedConfirmedBlock = serde_json::from_str(&buffer).unwrap();
 
-    let signature_to_find = "2Mh6diFhdKfy5MyJfWv2AWEYe71wdyMGceDGxTmtpsFDUMXptWe3RtEXAef9SCoNJveiEQUMDdeP6UJVDdrQzbdV";
-
-    for transaction_with_meta in &block.transactions {
-        if let EncodedTransaction::Json(ui_transaction) = &transaction_with_meta.transaction {
-            if ui_transaction.signatures.contains(&signature_to_find.to_string()) {
-                if let Some(meta) = &transaction_with_meta.meta {
-                    // Convert `OptionSerializer` to `Option` using the `From` trait you've implemented
-                    let pre_token_balances: Option<Vec<UiTransactionTokenBalance>> = meta.pre_token_balances.clone().into();
-
-                    if let Some(pre_token_balances) = pre_token_balances {
-                        for token_balance in pre_token_balances {
-                            if let Some(ui_amount) = token_balance.ui_token_amount.ui_amount {
-                                println!("uiAmount: {:?}", ui_amount);
-                            }
-                        }
-                    }
-                }
-                break; // Assuming only one transaction matches the signature
-            }
-        }
-    }
-
-    let num: f64 = 2068158565873.6777;
-    println!("static f64: {:?}", num);
-
-    let json_str = r#"{"number": 2068158565873.6777}"#;
-
-    // Parse the JSON string into the NumberContainer struct
-    let parsed: NumberContainer = serde_json::from_str(json_str).unwrap();
-
-    // Print the parsed number
-    println!("Parsed number: {:.4}", parsed.number);
-
-    let float_str = "2068158565873.6777";
-    let float_value: Result<f64, _> = float_str.parse();
-    match float_value {
-        Ok(n) => println!("Float value: {:.4}", n),
-        Err(e) => println!("Failed to parse string as float: {}", e),
-    }
+    // let signature_to_find = "2Mh6diFhdKfy5MyJfWv2AWEYe71wdyMGceDGxTmtpsFDUMXptWe3RtEXAef9SCoNJveiEQUMDdeP6UJVDdrQzbdV";
+    //
+    // for transaction_with_meta in &block.transactions {
+    //     if let EncodedTransaction::Json(ui_transaction) = &transaction_with_meta.transaction {
+    //         if ui_transaction.signatures.contains(&signature_to_find.to_string()) {
+    //             if let Some(meta) = &transaction_with_meta.meta {
+    //                 // Convert `OptionSerializer` to `Option` using the `From` trait you've implemented
+    //                 let pre_token_balances: Option<Vec<UiTransactionTokenBalance>> = meta.pre_token_balances.clone().into();
+    //
+    //                 if let Some(pre_token_balances) = pre_token_balances {
+    //                     for token_balance in pre_token_balances {
+    //                         if let Some(ui_amount) = token_balance.ui_token_amount.ui_amount {
+    //                             println!("uiAmount: {:?}", ui_amount);
+    //                         }
+    //                     }
+    //                 }
+    //             }
+    //             break; // Assuming only one transaction matches the signature
+    //         }
+    //     }
+    // }
 
     let options = BlockEncodingOptions {
         transaction_details: TransactionDetails::Full,
@@ -253,23 +272,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-
-    // let block: EncodedConfirmedBlock = serde_json::from_str(&buffer).unwrap();
-    //
-    // let options = BlockEncodingOptions {
-    //     transaction_details: TransactionDetails::Full,
-    //     show_rewards: true,
-    //     max_supported_transaction_version: Some(0),
-    // };
-    //
-    // match convert_block(block, UiTransactionEncoding::Json, options) {
-    //     Ok(versioned_block) => {
-    //         output_block(versioned_block).await?;
-    //     }
-    //     Err(e) => {
-    //         println!("Failed to convert block: {}", e);
-    //     }
-    // }
-    //
-    // Ok(())
 }

@@ -97,7 +97,7 @@ pub struct BlockEncodingOptions {
     pub max_supported_transaction_version: Option<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
 pub enum TransactionWithStatusMeta {
     // Very old transactions may be missing metadata
@@ -114,7 +114,7 @@ pub enum EncodeError {
     UnsupportedTransactionVersion(u8),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VersionedTransactionWithStatusMeta {
     pub transaction: VersionedTransaction,
     pub meta: TransactionStatusMeta,
@@ -366,7 +366,7 @@ impl JsonAccounts for Transaction {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TransactionStatusMeta {
     pub status: TransactionResult<()>,
     pub fee: u64,
@@ -548,7 +548,7 @@ impl UiCompiledInstruction {
 //     }
 // }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TransactionTokenBalance {
     pub account_index: u8,
     pub mint: String,
@@ -557,7 +557,7 @@ pub struct TransactionTokenBalance {
     pub program_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConfirmedTransactionWithStatusMeta {
     pub slot: Slot,
     pub tx_with_meta: TransactionWithStatusMeta,

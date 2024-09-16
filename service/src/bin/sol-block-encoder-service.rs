@@ -9,7 +9,8 @@ use {
             LedgerStorage,
             LedgerStorageConfig,
             FilterTxIncludeExclude,
-            UploaderConfig
+            UploaderConfig,
+            LedgerCacheConfig,
         },
     },
     std::sync::Arc,
@@ -27,7 +28,11 @@ use {
 };
 
 /// Create a consumer based on the given configuration.
-async fn create_consumer(config: Arc<Config>, uploader_config: UploaderConfig) -> KafkaConsumer {
+async fn create_consumer(
+    config: Arc<Config>,
+    uploader_config: UploaderConfig,
+    cache_config: LedgerCacheConfig
+) -> KafkaConsumer {
     info!("Connecting to kafka: {}", &config.kafka_brokers);
 
     let kproducer = create_producer(config.clone());
@@ -37,6 +42,7 @@ async fn create_consumer(config: Arc<Config>, uploader_config: UploaderConfig) -
         timeout: None,
         address: config.hbase_address.clone(),
         uploader_config: uploader_config.clone(),
+        cache_config: cache_config.clone(),
     };
     let storage = LedgerStorage::new_with_config(storage_config).await;
 
@@ -57,15 +63,22 @@ fn create_producer(config: Arc<Config>) -> KafkaProducer {
 }
 
 /// Handle the message processing.
-async fn handle_message_receiving(config: Arc<Config>, uploader_config: UploaderConfig) {
+async fn handle_message_receiving(
+    config: Arc<Config>,
+    uploader_config: UploaderConfig,
+    cache_config: LedgerCacheConfig) {
     debug!("Started consuming messages");
 
-    let kconsumer = create_consumer(config.clone(), uploader_config.clone()).await;
+    let kconsumer = create_consumer(
+        config.clone(),
+        uploader_config.clone(),
+        cache_config.clone()
+    ).await;
 
     kconsumer.consume().await;
 }
 
-fn process_arguments(matches: &ArgMatches) -> UploaderConfig {
+fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
     let disable_tx = matches.is_present("disable_tx");
     let disable_tx_by_addr = matches.is_present("disable_tx_by_addr");
     let disable_blocks = matches.is_present("disable_blocks");
@@ -133,6 +146,40 @@ fn process_arguments(matches: &ArgMatches) -> UploaderConfig {
     }
 }
 
+fn process_cache_arguments(matches: &ArgMatches) -> LedgerCacheConfig {
+    let enable_full_tx_cache = matches.is_present("enable_full_tx_cache");
+
+    let address = if matches.is_present("cache_address") {
+        value_t_or_exit!(matches, "cache_address", String)
+    } else {
+        String::new()
+    };
+
+    let timeout = if matches.is_present("cache_timeout") {
+        Some(std::time::Duration::from_secs(
+            value_t_or_exit!(matches, "cache_timeout", u64),
+        ))
+    } else {
+        None
+    };
+
+    let tx_cache_expiration = if matches.is_present("tx_cache_expiration") {
+        Some(std::time::Duration::from_secs(
+            value_t_or_exit!(matches, "tx_cache_expiration", u64) * 24 * 60 * 60,
+        ))
+    } else {
+        None
+    };
+
+    LedgerCacheConfig {
+        enable_full_tx_cache,
+        address,
+        timeout,
+        tx_cache_expiration,
+        ..Default::default()
+    }
+}
+
 fn create_filter(
     filter_tx_exclude_addrs: HashSet<Pubkey>,
     filter_tx_include_addrs: HashSet<Pubkey>,
@@ -162,7 +209,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli_app = block_uploader_app(solana_version, &default_args);
     let matches = cli_app.get_matches();
 
-    let uploader_config = process_arguments(&matches);
+    let uploader_config = process_uploader_arguments(&matches);
+    let cache_config = process_cache_arguments(&matches);
 
     env_logger::init();
 
@@ -170,7 +218,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app_config = Arc::new(Config::new());
 
-    handle_message_receiving(app_config, uploader_config).await;
+    handle_message_receiving(app_config, uploader_config, cache_config).await;
 
     Ok(())
 }

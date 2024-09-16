@@ -31,7 +31,7 @@ use {
     extract_memos::extract_and_fmt_memos,
     // transaction_error::TransactionError,
     log::{
-        // debug,
+        debug,
         error,
         info,
         // warn
@@ -45,6 +45,8 @@ use {
 };
 use md5::{compute};
 use solana_sdk::message::v0::LoadedAddresses;
+use memcache::{Client, MemcacheError};
+use crate::hbase::HBase;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -62,6 +64,9 @@ pub enum Error {
 
     #[error("tokio error")]
     TokioJoinError(JoinError),
+
+    #[error("Memcache error: {0}")]
+    MemcacheError(MemcacheError),
 }
 
 impl std::convert::From<HBaseError> for Error {
@@ -76,7 +81,45 @@ impl std::convert::From<std::io::Error> for Error {
     }
 }
 
+impl From<MemcacheError> for Error {
+    fn from(err: MemcacheError) -> Self {
+        Self::MemcacheError(err)
+    }
+}
+
+impl From<TaskError> for Error {
+    fn from(err: TaskError) -> Self {
+        match err {
+            TaskError::HBaseError(hbase_err) => Error::HBaseError(hbase_err),
+            TaskError::MemcacheError(memcache_err) => Error::MemcacheError(memcache_err),
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
+
+enum TaskResult {
+    BytesWritten(usize),
+    CachedTransactions(usize),
+}
+
+#[derive(Debug)]
+enum TaskError {
+    HBaseError(HBaseError),
+    MemcacheError(MemcacheError),
+}
+
+impl From<HBaseError> for TaskError {
+    fn from(err: HBaseError) -> Self {
+        TaskError::HBaseError(err)
+    }
+}
+
+impl From<MemcacheError> for TaskError {
+    fn from(err: MemcacheError) -> Self {
+        TaskError::MemcacheError(err)
+    }
+}
 
 // Convert a slot to its bucket representation whereby lower slots are always lexically ordered
 // before higher slots
@@ -119,6 +162,7 @@ pub const BLOCKS_TABLE_NAME: &str = "blocks";
 pub const TX_TABLE_NAME: &str = "tx";
 pub const TX_BY_ADDR_TABLE_NAME: &str = "tx-by-addr";
 pub const FULL_TX_TABLE_NAME: &str = "tx_full";
+pub const DEFAULT_MEMCACHE_ADDRESS: &str = "127.0.0.1:11211";
 
 #[derive(Debug)]
 pub struct LedgerStorageConfig {
@@ -126,6 +170,7 @@ pub struct LedgerStorageConfig {
     pub timeout: Option<std::time::Duration>,
     pub address: String,
     pub uploader_config: UploaderConfig,
+    pub cache_config: LedgerCacheConfig,
 }
 
 impl Default for LedgerStorageConfig {
@@ -135,6 +180,26 @@ impl Default for LedgerStorageConfig {
             timeout: None,
             address: DEFAULT_ADDRESS.to_string(),
             uploader_config: UploaderConfig::default(),
+            cache_config: LedgerCacheConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LedgerCacheConfig {
+    pub enable_full_tx_cache: bool,
+    pub address: String,
+    pub timeout: Option<std::time::Duration>,
+    pub tx_cache_expiration: Option<std::time::Duration>,
+}
+
+impl Default for LedgerCacheConfig {
+    fn default() -> Self {
+        Self {
+            enable_full_tx_cache: false,
+            address: DEFAULT_MEMCACHE_ADDRESS.to_string(),
+            timeout: Some(std::time::Duration::from_secs(1)),
+            tx_cache_expiration: Some(std::time::Duration::from_secs(60 * 60 * 24 * 14)), // 14 days
         }
     }
 }
@@ -194,6 +259,9 @@ pub struct FilterTxIncludeExclude {
 pub struct LedgerStorage {
     connection: HBaseConnection,
     uploader_config: UploaderConfig,
+    cache_client: Option<Client>,
+    enable_full_tx_cache: bool,
+    tx_cache_expiration: Option<std::time::Duration>,
 }
 
 impl LedgerStorage {
@@ -215,6 +283,7 @@ impl LedgerStorage {
             timeout,
             address,
             uploader_config,
+            cache_config,
         } = config;
         let connection = HBaseConnection::new(
             address.as_str(),
@@ -222,9 +291,21 @@ impl LedgerStorage {
             timeout,
         )
             .await;
+
+        let cache_client = if cache_config.enable_full_tx_cache {
+            // Add the "memcache://" prefix programmatically
+            let memcache_url = format!("memcache://{}", cache_config.address);
+            Some(Client::connect(memcache_url.as_str()).unwrap())
+        } else {
+            None
+        };
+
         Self {
             connection,
             uploader_config,
+            cache_client,
+            enable_full_tx_cache: cache_config.enable_full_tx_cache,
+            tx_cache_expiration: cache_config.tx_cache_expiration,
         }
     }
 
@@ -272,6 +353,7 @@ impl LedgerStorage {
 
         let mut tx_cells = vec![];
         let mut full_tx_cells = vec![];
+        let mut full_tx_cache = vec![];
         for (index, transaction_with_meta) in confirmed_block.transactions.iter().enumerate() {
             let VersionedTransactionWithStatusMeta { meta, transaction } = transaction_with_meta;
             let err = meta.status.clone().err();
@@ -283,7 +365,9 @@ impl LedgerStorage {
             let mut should_skip_tx_by_addr = false;
             let mut should_skip_full_tx = false;
 
-            if self.uploader_config.filter_voting_tx && is_voting_tx(transaction_with_meta) {
+            let is_voting = is_voting_tx(transaction_with_meta);
+
+            if self.uploader_config.filter_voting_tx && is_voting {
                 should_skip_tx_by_addr = true;
                 should_skip_full_tx = true;
             }
@@ -330,6 +414,19 @@ impl LedgerStorage {
                 ));
             }
 
+            if self.enable_full_tx_cache
+                && !is_voting
+                && !transaction_with_meta.meta.status.is_err() {
+                full_tx_cache.push((
+                    signature.to_string(),
+                    ConfirmedTransactionWithStatusMeta {
+                        slot,
+                        tx_with_meta: transaction_with_meta.clone().into(),
+                        block_time: confirmed_block.block_time,
+                    }
+                ));
+            }
+
             if !self.uploader_config.disable_tx && !should_skip_tx {
                 tx_cells.push((
                     signature.to_string(),
@@ -365,13 +462,37 @@ impl LedgerStorage {
             let full_tx_table_name = self.uploader_config.full_tx_table_name.clone();
             let use_tx_full_compression = self.uploader_config.use_tx_full_compression.clone();
             tasks.push(tokio::spawn(async move {
-                let result = conn.put_protobuf_cells_with_retry::<generated::ConfirmedTransactionWithStatusMeta>(
+                conn.put_protobuf_cells_with_retry::<generated::ConfirmedTransactionWithStatusMeta>(
                     full_tx_table_name.as_str(),
                     &full_tx_cells,
-                    use_tx_full_compression
+                    use_tx_full_compression,
                 )
-                    .await;
-                result
+                .await
+                .map(TaskResult::BytesWritten)
+                .map_err(TaskError::from)
+            }));
+        }
+
+        if !full_tx_cache.is_empty() && self.enable_full_tx_cache {
+            let mut cached_count = 0;
+            let cache_client = self.cache_client.clone();
+            let tx_cache_expiration = self.tx_cache_expiration;
+            info!("Writing block transactions to cache");
+            tasks.push(tokio::spawn(async move {
+                for (signature, transaction) in full_tx_cache {
+                    if let Some(client) = &cache_client {
+                        let serialized_tx = bincode::serialize(&transaction).unwrap();
+                        let expiration = tx_cache_expiration
+                            .map(|d| d.as_secs().min(u32::MAX as u64) as u32)
+                            .unwrap_or(0);
+                        client
+                            .set(&signature, serialized_tx.as_slice(), expiration)
+                            .map_err(TaskError::from)?;
+                        cached_count += 1;
+                        debug!("Cached transaction with signature {}", signature);
+                    }
+                }
+                Ok::<TaskResult, TaskError>(TaskResult::CachedTransactions(cached_count))
             }));
         }
 
@@ -387,7 +508,9 @@ impl LedgerStorage {
                     &tx_cells,
                     use_tx_compression
                 )
-                    .await
+                .await
+                .map(TaskResult::BytesWritten)
+                .map_err(TaskError::from)
             }));
         }
 
@@ -398,18 +521,25 @@ impl LedgerStorage {
             info!("HBase: spawning tx-by-addr upload thread");
             tasks.push(tokio::spawn(async move {
                 info!("HBase: calling put_protobuf_cells_with_retry tx-by-addr");
-                let result = conn.put_protobuf_cells_with_retry::<tx_by_addr::TransactionByAddr>(
+                conn.put_protobuf_cells_with_retry::<tx_by_addr::TransactionByAddr>(
                     tx_by_addr_table_name.as_str(),
                     &tx_by_addr_cells,
                     use_tx_by_addr_compression
                 )
-                    .await;
-                info!("HBase: finished put_protobuf_cells_with_retry call for tx-by-addr");
-                result
+               .await
+               .map(TaskResult::BytesWritten)
+               .map_err(TaskError::from)
+                // info!("HBase: finished put_protobuf_cells_with_retry call for tx-by-addr");
+
+                // match result {
+                //     Ok(bytes_written) => Ok(TaskResult::BytesWritten(bytes_written)),
+                //     Err(e) => Err(e),
+                // }
             }));
         }
 
         let mut bytes_written = 0;
+        let mut total_cached_transactions = 0;
         let mut maybe_first_err: Option<Error> = None;
 
         info!("HBase: waiting for all upload threads to finish...");
@@ -427,19 +557,37 @@ impl LedgerStorage {
                 Ok(Err(err)) => {
                     info!("HBase: got error result {:?}", err);
                     if maybe_first_err.is_none() {
-                        maybe_first_err = Some(Error::HBaseError(err));
+                        // maybe_first_err = Some(Error::HBaseError(err));
+                        match err {
+                            TaskError::HBaseError(hbase_err) => {
+                                maybe_first_err = Some(Error::HBaseError(hbase_err));
+                            }
+                            TaskError::MemcacheError(memcache_err) => {
+                                maybe_first_err = Some(Error::MemcacheError(memcache_err));
+                            }
+                        }
                     }
                 }
-                Ok(Ok(bytes)) => {
-                    info!("HBase: got success result");
-                    bytes_written += bytes;
+                Ok(Ok(task_result)) => {
+                    match task_result {
+                        TaskResult::BytesWritten(bytes) => bytes_written += bytes,
+                        TaskResult::CachedTransactions(count) => total_cached_transactions += count,
+                    }
                 }
+                // Ok(Ok(bytes)) => {
+                //     info!("HBase: got success result");
+                //     bytes_written += bytes;
+                // }
             }
         }
 
         if let Some(err) = maybe_first_err {
             info!("HBase: returning upload error result {:?}", err);
             return Err(err);
+        }
+
+        if self.enable_full_tx_cache {
+            info!("Cached {} transactions from slot {}",slot, total_cached_transactions);
         }
 
         let num_transactions = confirmed_block.transactions.len();

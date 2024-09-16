@@ -8,6 +8,8 @@ use {
     solana_clap_utils::{
         input_validators::{
             is_pubkey,
+            is_parsable,
+            is_within_range,
         },
     },
 };
@@ -130,6 +132,38 @@ pub fn block_uploader_app<'a>(version: &'a str, default_args: &'a DefaultBlockUp
                 .value_name("KEY")
                 .help("Store all transactions in tx-by-addr except the ones with this account key. Overrides filter_tx_by_addr_include_addr."),
         )
+        .arg(
+            Arg::with_name("enable_full_tx_cache")
+                .long("enable-full-tx-cache")
+                .takes_value(false)
+                .help("Enable block transaction cache."),
+        )
+        .arg(
+            Arg::with_name("cache_timeout")
+                .long("cache-timeout")
+                .value_name("SECONDS")
+                .validator(is_parsable::<u64>)
+                .takes_value(true)
+                // .default_value(&default_args.cache_timeout)
+                .help("Cache connection timeout"),
+        )
+        .arg(
+            Arg::with_name("tx_cache_expiration")
+                .long("tx-cache-expiration")
+                .value_name("DAYS")
+                .validator(|v| is_within_range::<usize, _>(v, 0..=30))
+                .takes_value(true)
+                // .default_value(&default_args.tx_cache_expiration)
+                .help("Number of days before tx cache records expire"),
+        )
+        .arg(
+            Arg::with_name("cache_address")
+                .long("cache-address")
+                .value_name("ADDRESS")
+                .takes_value(true)
+                // .default_value(&default_args.cache_address)
+                .help("Address of the cache server"),
+        )
     ;
 }
 
@@ -143,6 +177,7 @@ pub struct DefaultBlockUploaderArgs {
     pub disable_tx_compression: bool,
     pub disable_tx_by_addr_compression: bool,
     pub disable_tx_full_compression: bool,
+    pub enable_full_tx_cache: bool,
 }
 
 impl DefaultBlockUploaderArgs {
@@ -157,6 +192,7 @@ impl DefaultBlockUploaderArgs {
             disable_tx_compression: false,
             disable_tx_by_addr_compression: false,
             disable_tx_full_compression: false,
+            enable_full_tx_cache: false,
         }
     }
 }
