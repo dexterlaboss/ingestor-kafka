@@ -294,7 +294,7 @@ impl LedgerStorage {
 
         let cache_client = if cache_config.enable_full_tx_cache {
             // Add the "memcache://" prefix programmatically
-            let memcache_url = format!("memcache://{}", cache_config.address);
+            let memcache_url = format!("memcache://{}?protocol=ascii", cache_config.address);
             Some(Client::connect(memcache_url.as_str()).unwrap())
         } else {
             None
