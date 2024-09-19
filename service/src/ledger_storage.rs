@@ -15,17 +15,19 @@ use {
             TransactionByAddrInfo,
             VersionedTransactionWithStatusMeta,
             ConfirmedTransactionWithStatusMeta,
+            TransactionStatusMeta,
         },
         convert::{
             generated,
             tx_by_addr
         },
+        compression::compress_best,
     },
     solana_sdk::{
-        clock::Slot,
+        clock::{Slot, UnixTimestamp},
         pubkey::Pubkey,
         sysvar::is_sysvar_id,
-        transaction::TransactionError,
+        transaction::{TransactionError, VersionedTransaction},
     },
     // solana_storage_proto::convert::generated,
     extract_memos::extract_and_fmt_memos,
@@ -92,6 +94,7 @@ impl From<TaskError> for Error {
         match err {
             TaskError::HBaseError(hbase_err) => Error::HBaseError(hbase_err),
             TaskError::MemcacheError(memcache_err) => Error::MemcacheError(memcache_err),
+            TaskError::IoError(io_err) => Error::IoError(io_err),
         }
     }
 }
@@ -107,6 +110,13 @@ enum TaskResult {
 enum TaskError {
     HBaseError(HBaseError),
     MemcacheError(MemcacheError),
+    IoError(std::io::Error),
+}
+
+impl From<std::io::Error> for TaskError {
+    fn from(err: std::io::Error) -> Self {
+        TaskError::IoError(err)
+    }
 }
 
 impl From<HBaseError> for TaskError {
@@ -156,6 +166,75 @@ struct TransactionInfo {
     err: Option<TransactionError>, // None if the transaction executed successfully
     // memo: Option<String>, // Transaction memo
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct StoredConfirmedTransactionWithStatusMeta {
+    pub slot: Slot,
+    pub tx_with_meta: StoredConfirmedBlockTransaction,
+    pub block_time: Option<UnixTimestamp>,
+}
+
+impl From<ConfirmedTransactionWithStatusMeta> for StoredConfirmedTransactionWithStatusMeta {
+    fn from(value: ConfirmedTransactionWithStatusMeta) -> Self {
+        Self {
+            slot: value.slot,
+            tx_with_meta: value.tx_with_meta.into(),
+            block_time: value.block_time,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct StoredConfirmedBlockTransaction {
+    transaction: VersionedTransaction,
+    meta: Option<StoredConfirmedBlockTransactionStatusMeta>,
+}
+
+// #[cfg(test)]
+impl From<TransactionWithStatusMeta> for StoredConfirmedBlockTransaction {
+    fn from(value: TransactionWithStatusMeta) -> Self {
+        match value {
+            TransactionWithStatusMeta::MissingMetadata(transaction) => Self {
+                transaction: VersionedTransaction::from(transaction),
+                meta: None,
+            },
+            TransactionWithStatusMeta::Complete(VersionedTransactionWithStatusMeta {
+                                                    transaction,
+                                                    meta,
+                                                }) => Self {
+                transaction,
+                meta: Some(meta.into()),
+            },
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct StoredConfirmedBlockTransactionStatusMeta {
+    err: Option<TransactionError>,
+    fee: u64,
+    pre_balances: Vec<u64>,
+    post_balances: Vec<u64>,
+}
+
+impl From<TransactionStatusMeta> for StoredConfirmedBlockTransactionStatusMeta {
+    fn from(value: TransactionStatusMeta) -> Self {
+        let TransactionStatusMeta {
+            status,
+            fee,
+            pre_balances,
+            post_balances,
+            ..
+        } = value;
+        Self {
+            err: status.err(),
+            fee,
+            pre_balances,
+            post_balances,
+        }
+    }
+}
+
 
 pub const DEFAULT_ADDRESS: &str = "127.0.0.1:9090";
 pub const BLOCKS_TABLE_NAME: &str = "blocks";
@@ -481,13 +560,19 @@ impl LedgerStorage {
             tasks.push(tokio::spawn(async move {
                 for (signature, transaction) in full_tx_cache {
                     if let Some(client) = &cache_client {
-                        let serialized_tx = bincode::serialize(&transaction).unwrap();
+                        let stored_tx: StoredConfirmedTransactionWithStatusMeta = transaction.into();
+
+                        let serialized_tx = bincode::serialize(&stored_tx).unwrap();
+                        let compressed_tx = compress_best(&serialized_tx).map_err(TaskError::from)?;
+
                         let expiration = tx_cache_expiration
                             .map(|d| d.as_secs().min(u32::MAX as u64) as u32)
                             .unwrap_or(0);
+
                         client
-                            .set(&signature, serialized_tx.as_slice(), expiration)
+                            .set(&signature, compressed_tx.as_slice(), expiration)
                             .map_err(TaskError::from)?;
+
                         cached_count += 1;
                         debug!("Cached transaction with signature {}", signature);
                     }
@@ -564,6 +649,9 @@ impl LedgerStorage {
                             }
                             TaskError::MemcacheError(memcache_err) => {
                                 maybe_first_err = Some(Error::MemcacheError(memcache_err));
+                            }
+                            TaskError::IoError(io_err) => {
+                                maybe_first_err = Some(Error::IoError(io_err));
                             }
                         }
                     }
