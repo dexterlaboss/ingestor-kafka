@@ -69,6 +69,9 @@ pub enum Error {
 
     #[error("Memcache error: {0}")]
     MemcacheError(MemcacheError),
+
+    #[error("Protobuf error: {0}")]
+    EncodingError(prost::EncodeError),
 }
 
 impl std::convert::From<HBaseError> for Error {
@@ -95,6 +98,7 @@ impl From<TaskError> for Error {
             TaskError::HBaseError(hbase_err) => Error::HBaseError(hbase_err),
             TaskError::MemcacheError(memcache_err) => Error::MemcacheError(memcache_err),
             TaskError::IoError(io_err) => Error::IoError(io_err),
+            TaskError::EncodingError(enc_err) => Error::EncodingError(enc_err),
         }
     }
 }
@@ -111,6 +115,7 @@ enum TaskError {
     HBaseError(HBaseError),
     MemcacheError(MemcacheError),
     IoError(std::io::Error),
+    EncodingError(prost::EncodeError)
 }
 
 impl From<std::io::Error> for TaskError {
@@ -128,6 +133,23 @@ impl From<HBaseError> for TaskError {
 impl From<MemcacheError> for TaskError {
     fn from(err: MemcacheError) -> Self {
         TaskError::MemcacheError(err)
+    }
+}
+
+#[derive(Debug)]
+pub enum CacheWriteError {
+    MemcacheError(MemcacheError),         // Error from cache client
+    IoError(std::io::Error),                // Error from encoding (e.g., Protobuf)
+    EncodingError(prost::EncodeError),
+}
+
+impl From<CacheWriteError> for TaskError {
+    fn from(error: CacheWriteError) -> Self {
+        match error {
+            CacheWriteError::MemcacheError(e) => TaskError::MemcacheError(e),
+            CacheWriteError::IoError(e) => TaskError::IoError(e),
+            CacheWriteError::EncodingError(e) => TaskError::EncodingError(e),
+        }
     }
 }
 
@@ -560,18 +582,16 @@ impl LedgerStorage {
             tasks.push(tokio::spawn(async move {
                 for (signature, transaction) in full_tx_cache {
                     if let Some(client) = &cache_client {
-                        let stored_tx: StoredConfirmedTransactionWithStatusMeta = transaction.into();
+                        // let stored_tx: generated::ConfirmedTransactionWithStatusMeta = transaction.into();
 
-                        let serialized_tx = bincode::serialize(&stored_tx).unwrap();
-                        let compressed_tx = compress_best(&serialized_tx).map_err(TaskError::from)?;
-
-                        let expiration = tx_cache_expiration
-                            .map(|d| d.as_secs().min(u32::MAX as u64) as u32)
-                            .unwrap_or(0);
-
-                        client
-                            .set(&signature, compressed_tx.as_slice(), expiration)
-                            .map_err(TaskError::from)?;
+                        cache_transaction::<generated::ConfirmedTransactionWithStatusMeta>(
+                            &client,
+                            &signature,
+                            transaction.into(),
+                            tx_cache_expiration,
+                        )
+                        .await
+                        .map_err(TaskError::from)?;
 
                         cached_count += 1;
                         debug!("Cached transaction with signature {}", signature);
@@ -652,6 +672,9 @@ impl LedgerStorage {
                             }
                             TaskError::IoError(io_err) => {
                                 maybe_first_err = Some(Error::IoError(io_err));
+                            }
+                            TaskError::EncodingError(enc_err) => {
+                                maybe_first_err = Some(Error::EncodingError(enc_err));
                             }
                         }
                     }
@@ -745,6 +768,32 @@ impl LedgerStorage {
             true
         }
     }
+}
+
+pub async fn cache_transaction<T>(
+    cache_client: &Client,
+    signature: &str,
+    transaction: T,
+    tx_cache_expiration: Option<std::time::Duration>,
+) ->std::result::Result<(), CacheWriteError>
+    where
+        T: prost::Message,
+{
+    let mut buf = Vec::with_capacity(transaction.encoded_len());
+
+    transaction.encode(&mut buf).map_err(CacheWriteError::EncodingError)?;
+
+    let compressed_tx = compress_best(&buf).map_err(CacheWriteError::IoError)?;
+
+    let expiration = tx_cache_expiration
+        .map(|d| d.as_secs().min(u32::MAX as u64) as u32)
+        .unwrap_or(0);
+
+    cache_client
+        .set(signature, compressed_tx.as_slice(), expiration)
+        .map_err(CacheWriteError::MemcacheError)?;
+
+    Ok(())
 }
 
 fn get_account_keys(transaction_with_meta: &VersionedTransactionWithStatusMeta) -> Vec<Pubkey> {
