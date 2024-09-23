@@ -1,1 +1,1 @@
-part of [LiteRPC](https://github.com/dexterlaboss/solana-lite-rpc/blob/master/README.md)
+part of [ArchivalRPC](https://github.com/dexterlaboss/archival-rpc/blob/master/README.md)
