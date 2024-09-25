@@ -503,7 +503,7 @@ impl LedgerStorage {
             }
 
             if self.uploader_config.enable_full_tx && !should_skip_full_tx {
-                should_skip_tx = true;
+                // should_skip_tx = true;
 
                 full_tx_cells.push((
                     signature.to_string(),
@@ -528,7 +528,7 @@ impl LedgerStorage {
                 ));
             }
 
-            if !self.uploader_config.disable_tx && !should_skip_tx {
+            if !self.uploader_config.disable_tx /*&& !should_skip_tx*/ {
                 tx_cells.push((
                     signature.to_string(),
                     TransactionInfo {
