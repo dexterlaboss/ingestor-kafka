@@ -86,10 +86,12 @@ fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
     let use_md5_row_key_salt = matches.is_present("use_md5_row_key_salt");
     let filter_program_accounts = matches.is_present("filter_tx_by_addr_programs");
     let filter_voting_tx = matches.is_present("filter_voting_tx");
+    let filter_error_tx = matches.is_present("filter_error_tx");
     let use_blocks_compression = !matches.is_present("disable_block_compression");
     let use_tx_compression = !matches.is_present("disable_tx_compression");
     let use_tx_by_addr_compression = !matches.is_present("disable_tx_by_addr_compression");
     let use_tx_full_compression = !matches.is_present("disable_tx_full_compression");
+    let hbase_write_to_wal = !matches.is_present("hbase_skip_wal");
 
     let filter_tx_full_include_addrs: HashSet<Pubkey> =
         values_t!(matches, "filter_tx_full_include_addr", Pubkey)
@@ -138,10 +140,12 @@ fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
         use_md5_row_key_salt,
         filter_program_accounts,
         filter_voting_tx,
+        filter_error_tx,
         use_blocks_compression,
         use_tx_compression,
         use_tx_by_addr_compression,
         use_tx_full_compression,
+        hbase_write_to_wal,
         ..Default::default()
     }
 }

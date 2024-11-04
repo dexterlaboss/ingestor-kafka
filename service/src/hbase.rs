@@ -121,13 +121,14 @@ impl HBaseConnection {
         table: &str,
         cells: &[(RowKey, T)],
         use_compression: bool,
+        use_wal: bool,
     ) -> Result<usize>
         where
             T: serde::ser::Serialize,
     {
         retry(ExponentialBackoff::default(), || async {
             let mut client = self.client();
-            Ok(client.put_bincode_cells(table, cells, use_compression).await?)
+            Ok(client.put_bincode_cells(table, cells, use_compression, use_wal).await?)
         })
             .await
     }
@@ -137,13 +138,14 @@ impl HBaseConnection {
         table: &str,
         cells: &[(RowKey, T)],
         use_compression: bool,
+        use_wal: bool,
     ) -> Result<usize>
         where
             T: prost::Message,
     {
         retry(ExponentialBackoff::default(), || async {
             let mut client = self.client();
-            Ok(client.put_protobuf_cells(table, cells, use_compression).await?)
+            Ok(client.put_protobuf_cells(table, cells, use_compression, use_wal).await?)
         })
             .await
     }
@@ -374,6 +376,7 @@ impl HBase {
         table: &str,
         cells: &[(RowKey, T)],
         use_compression: bool,
+        use_wal: bool,
     ) -> Result<usize>
         where
             T: serde::ser::Serialize,
@@ -393,7 +396,7 @@ impl HBase {
             new_row_data.push((row_key, vec![("bin".to_string(), data)]));
         }
 
-        self.put_row_data(table, "x", &new_row_data).await?;
+        self.put_row_data(table, "x", &new_row_data, use_wal).await?;
         Ok(bytes_written)
     }
 
@@ -402,6 +405,7 @@ impl HBase {
         table: &str,
         cells: &[(RowKey, T)],
         use_compression: bool,
+        use_wal: bool,
     ) -> Result<usize>
         where
             T: prost::Message,
@@ -422,7 +426,7 @@ impl HBase {
             new_row_data.push((row_key, vec![("proto".to_string(), data)]));
         }
 
-        self.put_row_data(table, "x", &new_row_data).await?;
+        self.put_row_data(table, "x", &new_row_data, use_wal).await?;
         Ok(bytes_written)
     }
 
@@ -431,6 +435,7 @@ impl HBase {
         table_name: &str,
         family_name: &str,
         row_data: &[(&RowKey, RowData)],
+        use_wal: bool,
     ) -> Result<()> {
         let mut mutation_batches = Vec::new();
         for (row_key, cell_data) in row_data {
@@ -439,6 +444,7 @@ impl HBase {
                 let mut mutation_builder = MutationBuilder::default();
                 mutation_builder.column(family_name, cell_name);
                 mutation_builder.value(cell_value.clone());
+                mutation_builder.write_to_wal(use_wal);
                 mutations.push(mutation_builder.build());
             }
             mutation_batches.push(BatchMutation::new(Some(row_key.as_bytes().to_vec()), mutations));

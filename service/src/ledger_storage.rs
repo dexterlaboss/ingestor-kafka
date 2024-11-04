@@ -320,10 +320,12 @@ pub struct UploaderConfig {
     pub use_md5_row_key_salt: bool,
     pub filter_program_accounts: bool,
     pub filter_voting_tx: bool,
+    pub filter_error_tx: bool,
     pub use_blocks_compression: bool,
     pub use_tx_compression: bool,
     pub use_tx_by_addr_compression: bool,
     pub use_tx_full_compression: bool,
+    pub hbase_write_to_wal: bool,
 }
 
 impl Default for UploaderConfig {
@@ -342,10 +344,12 @@ impl Default for UploaderConfig {
             use_md5_row_key_salt: false,
             filter_program_accounts: false,
             filter_voting_tx: false,
+            filter_error_tx: false,
             use_blocks_compression: true,
             use_tx_compression: true,
             use_tx_by_addr_compression: true,
             use_tx_full_compression: true,
+            hbase_write_to_wal: true,
         }
     }
 }
@@ -423,7 +427,8 @@ impl LedgerStorage {
                     .put_protobuf_cells_with_retry::<generated::ConfirmedTransaction>(
                         self.uploader_config.full_tx_table_name.as_str(),
                         &tx_cells,
-                        self.uploader_config.use_tx_full_compression
+                        self.uploader_config.use_tx_full_compression,
+                        self.uploader_config.hbase_write_to_wal,
                     )
                     .await?;
 
@@ -469,6 +474,13 @@ impl LedgerStorage {
             let is_voting = is_voting_tx(transaction_with_meta);
 
             if self.uploader_config.filter_voting_tx && is_voting {
+                should_skip_tx_by_addr = true;
+                should_skip_full_tx = true;
+            }
+
+            let is_error = is_error_tx(transaction_with_meta);
+
+            if self.uploader_config.filter_error_tx && is_error {
                 should_skip_tx_by_addr = true;
                 should_skip_full_tx = true;
             }
@@ -562,11 +574,13 @@ impl LedgerStorage {
             let conn = self.connection.clone();
             let full_tx_table_name = self.uploader_config.full_tx_table_name.clone();
             let use_tx_full_compression = self.uploader_config.use_tx_full_compression.clone();
+            let write_to_wal = self.uploader_config.hbase_write_to_wal.clone();
             tasks.push(tokio::spawn(async move {
                 conn.put_protobuf_cells_with_retry::<generated::ConfirmedTransactionWithStatusMeta>(
                     full_tx_table_name.as_str(),
                     &full_tx_cells,
                     use_tx_full_compression,
+                    write_to_wal,
                 )
                 .await
                 .map(TaskResult::BytesWritten)
@@ -578,7 +592,7 @@ impl LedgerStorage {
             let mut cached_count = 0;
             let cache_client = self.cache_client.clone();
             let tx_cache_expiration = self.tx_cache_expiration;
-            info!("Writing block transactions to cache");
+            debug!("Writing block transactions to cache");
             tasks.push(tokio::spawn(async move {
                 for (signature, transaction) in full_tx_cache {
                     if let Some(client) = &cache_client {
@@ -605,13 +619,15 @@ impl LedgerStorage {
             let conn = self.connection.clone();
             let tx_table_name = self.uploader_config.tx_table_name.clone();
             let use_tx_compression = self.uploader_config.use_tx_compression.clone();
-            info!("HBase: spawning tx upload thread");
+            let write_to_wal = self.uploader_config.hbase_write_to_wal.clone();
+            debug!("HBase: spawning tx upload thread");
             tasks.push(tokio::spawn(async move {
-                info!("HBase: calling put_bincode_cells_with_retry for tx");
+                debug!("HBase: calling put_bincode_cells_with_retry for tx");
                 conn.put_bincode_cells_with_retry::<TransactionInfo>(
                     tx_table_name.as_str(),
                     &tx_cells,
-                    use_tx_compression
+                    use_tx_compression,
+                    write_to_wal,
                 )
                 .await
                 .map(TaskResult::BytesWritten)
@@ -623,13 +639,15 @@ impl LedgerStorage {
             let conn = self.connection.clone();
             let tx_by_addr_table_name = self.uploader_config.tx_by_addr_table_name.clone();
             let use_tx_by_addr_compression = self.uploader_config.use_tx_by_addr_compression.clone();
-            info!("HBase: spawning tx-by-addr upload thread");
+            let write_to_wal = self.uploader_config.hbase_write_to_wal.clone();
+            debug!("HBase: spawning tx-by-addr upload thread");
             tasks.push(tokio::spawn(async move {
-                info!("HBase: calling put_protobuf_cells_with_retry tx-by-addr");
+                debug!("HBase: calling put_protobuf_cells_with_retry tx-by-addr");
                 conn.put_protobuf_cells_with_retry::<tx_by_addr::TransactionByAddr>(
                     tx_by_addr_table_name.as_str(),
                     &tx_by_addr_cells,
-                    use_tx_by_addr_compression
+                    use_tx_by_addr_compression,
+                    write_to_wal
                 )
                .await
                .map(TaskResult::BytesWritten)
@@ -647,20 +665,20 @@ impl LedgerStorage {
         let mut total_cached_transactions = 0;
         let mut maybe_first_err: Option<Error> = None;
 
-        info!("HBase: waiting for all upload threads to finish...");
+        debug!("HBase: waiting for all upload threads to finish...");
 
         let results = futures::future::join_all(tasks).await;
-        info!("HBase: got upload results");
+        debug!("HBase: got upload results");
         for result in results {
             match result {
                 Err(err) => {
-                    info!("HBase: got error result {:?}", err);
+                    debug!("HBase: got error result {:?}", err);
                     if maybe_first_err.is_none() {
                         maybe_first_err = Some(Error::TokioJoinError(err));
                     }
                 }
                 Ok(Err(err)) => {
-                    info!("HBase: got error result {:?}", err);
+                    debug!("HBase: got error result {:?}", err);
                     if maybe_first_err.is_none() {
                         // maybe_first_err = Some(Error::HBaseError(err));
                         match err {
@@ -693,7 +711,7 @@ impl LedgerStorage {
         }
 
         if let Some(err) = maybe_first_err {
-            info!("HBase: returning upload error result {:?}", err);
+            debug!("HBase: returning upload error result {:?}", err);
             return Err(err);
         }
 
@@ -714,7 +732,7 @@ impl LedgerStorage {
             confirmed_block.into()
         )];
 
-        info!("HBase: calling put_protobuf_cells_with_retry for blocks");
+        debug!("HBase: calling put_protobuf_cells_with_retry for blocks");
 
         if !self.uploader_config.disable_blocks {
             bytes_written += self
@@ -722,7 +740,8 @@ impl LedgerStorage {
                 .put_protobuf_cells_with_retry::<generated::ConfirmedBlock>(
                     self.uploader_config.blocks_table_name.as_str(),
                     &blocks_cells,
-                    self.uploader_config.use_blocks_compression
+                    self.uploader_config.use_blocks_compression,
+                        self.uploader_config.hbase_write_to_wal
                 )
                 .await
                 .map_err(|err| {
@@ -812,6 +831,10 @@ fn get_account_keys(transaction_with_meta: &VersionedTransactionWithStatusMeta) 
             Vec::from(transaction_with_meta.transaction.message.static_account_keys())
         }
     }
+}
+
+fn is_error_tx(transaction_with_meta: &VersionedTransactionWithStatusMeta) -> bool {
+    transaction_with_meta.meta.status.is_err()
 }
 
 fn is_voting_tx(transaction_with_meta: &VersionedTransactionWithStatusMeta) -> bool {

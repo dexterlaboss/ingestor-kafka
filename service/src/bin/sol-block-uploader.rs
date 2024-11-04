@@ -62,6 +62,7 @@ fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
     let use_tx_compression = !matches.is_present("disable_tx_compression");
     let use_tx_by_addr_compression = !matches.is_present("disable_tx_by_addr_compression");
     let use_tx_full_compression = !matches.is_present("disable_tx_full_compression");
+    let hbase_write_to_wal = !matches.is_present("hbase_skip_wal");
 
     let filter_tx_full_include_addrs: HashSet<Pubkey> =
         values_t!(matches, "filter_tx_full_include_addr", Pubkey)
@@ -114,10 +115,12 @@ fn process_uploader_arguments(matches: &ArgMatches) -> UploaderConfig {
         use_md5_row_key_salt: false,
         filter_program_accounts: false,
         filter_voting_tx: false,
+        filter_error_tx: false,
         use_blocks_compression,
         use_tx_compression,
         use_tx_by_addr_compression,
         use_tx_full_compression,
+        hbase_write_to_wal,
     }
 }
 
