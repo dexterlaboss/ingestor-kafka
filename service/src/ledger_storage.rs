@@ -481,7 +481,6 @@ impl LedgerStorage {
             let is_error = is_error_tx(transaction_with_meta);
 
             if self.uploader_config.filter_error_tx && is_error {
-                should_skip_tx_by_addr = true;
                 should_skip_full_tx = true;
             }
 
