@@ -1,4 +1,4 @@
-FROM rust:1.70 as build
+FROM rust:1.70 AS build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \

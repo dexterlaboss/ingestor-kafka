@@ -33,29 +33,29 @@ jobs:
       # Extract x86_64 binary from Docker image
       - name: Extract x86_64 binary from Docker
         run: |
-          mkdir -p /output
+          mkdir -p ${{ github.workspace }}/output
           docker run --rm \
             --platform linux/amd64 \
-            -v ${{ github.workspace }}:/output \
+            -v ${{ github.workspace }}/output:/output \
             dexterlaboss/archival-rpc:${GITHUB_REF_NAME} \
-            sh -c "ls -l /solana && cp /solana/block-encoder-service /output/block_encoder_service_${GITHUB_REF_NAME}_linux_amd64"
+            cp /solana/block-encoder-service /output/block_encoder_service_${GITHUB_REF_NAME}_linux_amd64
 
       # Extract arm64 binary from Docker image
       - name: Extract arm64 binary from Docker
         run: |
-          mkdir -p /output
+          mkdir -p ${{ github.workspace }}/output
           docker run --rm \
             --platform linux/arm64 \
-            -v ${{ github.workspace }}:/output \
+            -v ${{ github.workspace }}/output:/output \
             dexterlaboss/archival-rpc:${GITHUB_REF_NAME} \
-            sh -c "ls -l /solana && cp /solana/block-encoder-service /output/block_encoder_service_${GITHUB_REF_NAME}_linux_arm64"
+            cp /solana/block-encoder-service /output/block_encoder_service_${GITHUB_REF_NAME}_linux_arm64
 
       # Upload x86_64 binary to GitHub Release
       - name: Upload x86_64 binary to GitHub Release
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ steps.gh-release.outputs.upload_url }}
-          asset_path: ./block_encoder_service_${{ github.ref_name }}_linux_amd64
+          asset_path: ./output/block_encoder_service_${{ github.ref_name }}_linux_amd64
           asset_name: block_encoder_service_${{ github.ref_name }}_linux_amd64
           asset_content_type: application/octet-stream
         env:
@@ -66,7 +66,7 @@ jobs:
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ steps.gh-release.outputs.upload_url }}
-          asset_path: ./block_encoder_service_${{ github.ref_name }}_linux_arm64
+          asset_path: ./output/block_encoder_service_${{ github.ref_name }}_linux_arm64
           asset_name: block_encoder_service_${{ github.ref_name }}_linux_arm64
           asset_content_type: application/octet-stream
         env:
