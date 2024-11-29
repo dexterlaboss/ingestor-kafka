@@ -1,4 +1,4 @@
-FROM rust:1.64 as build
+FROM rust:1.70 as build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \
@@ -7,25 +7,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libclang-dev \
     libudev-dev
 
+ARG TARGETARCH
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+        echo "x86_64-unknown-linux-gnu" > /target_arch; \
+    elif [ "$TARGETARCH" = "arm64" ]; then \
+        echo "aarch64-unknown-linux-gnu" > /target_arch; \
+    else \
+        echo "Unsupported architecture: $TARGETARCH" && exit 1; \
+    fi && \
+    rustup target add $(cat /target_arch)
+
 RUN USER=root cargo new --bin solana
 WORKDIR /solana
 
 COPY . .
 
-ARG TARGETARCH
-RUN rustup target add ${TARGETARCH}-unknown-linux-gnu
-
-RUN cargo build --release --target ${TARGETARCH}-unknown-linux-gnu
-
+RUN RUST_TARGET=$(cat /target_arch) && \
+    cargo build --release --target $RUST_TARGET && \
+    cp /solana/target/$RUST_TARGET/release/block-encoder-service /solana/block-encoder-service
 
 
-FROM rust:1.64
+
+FROM rust:1.70
 
 RUN mkdir -p /solana
 WORKDIR /solana
 
-ARG TARGETARCH
-COPY --from=build /solana/target/${TARGETARCH}-unknown-linux-gnu/release/block-encoder-service .
+COPY --from=build /solana/block-encoder-service .
 
 EXPOSE 8899
 

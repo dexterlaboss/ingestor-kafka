@@ -30,34 +30,25 @@ jobs:
             --tag dexterlaboss/archival-rpc:${GITHUB_REF_NAME} \
             --push .
 
-      # Create GitHub Release
-      - name: Create GitHub Release
-        id: gh-release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ github.ref }}
-          name: Release ${{ github.ref }}
-          body: 'Release of version ${{ github.ref }}'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       # Extract x86_64 binary from Docker image
       - name: Extract x86_64 binary from Docker
         run: |
+          mkdir -p /output
           docker run --rm \
             --platform linux/amd64 \
             -v ${{ github.workspace }}:/output \
             dexterlaboss/archival-rpc:${GITHUB_REF_NAME} \
-            cp /solana/block-encoder-service /output/block_encoder_service_${{ github.ref_name }}_linux_amd64
+            sh -c "ls -l /solana && cp /solana/block-encoder-service /output/block_encoder_service_${GITHUB_REF_NAME}_linux_amd64"
 
       # Extract arm64 binary from Docker image
       - name: Extract arm64 binary from Docker
         run: |
+          mkdir -p /output
           docker run --rm \
             --platform linux/arm64 \
             -v ${{ github.workspace }}:/output \
             dexterlaboss/archival-rpc:${GITHUB_REF_NAME} \
-            cp /solana/block-encoder-service /output/block_encoder_service_${{ github.ref_name }}_linux_arm64
+            sh -c "ls -l /solana && cp /solana/block-encoder-service /output/block_encoder_service_${GITHUB_REF_NAME}_linux_arm64"
 
       # Upload x86_64 binary to GitHub Release
       - name: Upload x86_64 binary to GitHub Release
