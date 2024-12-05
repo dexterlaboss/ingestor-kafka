@@ -740,7 +740,7 @@ impl LedgerStorage {
                     self.uploader_config.blocks_table_name.as_str(),
                     &blocks_cells,
                     self.uploader_config.use_blocks_compression,
-                    self.uploader_config.hbase_write_to_wal
+                        self.uploader_config.hbase_write_to_wal
                 )
                 .await
                 .map_err(|err| {
